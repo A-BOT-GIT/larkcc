@@ -172,8 +172,8 @@ export function runCmd(cmd: string, cwd: string): string {
 // ── 内置快速执行命令（不走 Claude，秒返回） ───────────────────
 
 export const BUILTIN_EXEC: Record<string, (cwd: string) => string> = {
-  "status": (cwd) => runCmd("git status && echo '---' && git log --oneline -5", cwd),
-  "s":      (cwd) => runCmd("git status && echo '---' && git log --oneline -5", cwd),
+  "gs":     (cwd) => runCmd("git status && echo '---' && git log --oneline -5", cwd),
+  "gst":    (cwd) => runCmd("git status && echo '---' && git log --oneline -5", cwd),
   "diff":   (cwd) => runCmd("git diff", cwd),
   "d":      (cwd) => runCmd("git diff", cwd),
   "log":    (cwd) => runCmd("git log --oneline -20", cwd),
@@ -182,6 +182,21 @@ export const BUILTIN_EXEC: Record<string, (cwd: string) => string> = {
   "b":      (cwd) => runCmd("git branch -a", cwd),
   "pwd":    (cwd) => runCmd("pwd && echo '---' && ls -la", cwd),
   "ps":     (_)   => runCmd("ps aux | grep -v grep | head -20", process.cwd()),
+};
+
+// ── 内置卡片命令（不走 Claude，由 message-handler 渲染卡片） ─────
+
+/**
+ * 卡片命令名 → 渲染类型。
+ * 实际渲染交给 message-handler.ts，因为卡片需要 runtime 状态（messageCount、startupTime 等）。
+ */
+export const BUILTIN_CARD_CMD: Record<string, "status" | "usage" | "sessions"> = {
+  "status":   "status",
+  "st":       "status",
+  "usage":    "usage",
+  "u":        "usage",
+  "sessions": "sessions",
+  "ss":       "sessions",
 };
 
 // ── 模板解析 ──────────────────────────────────────────────────
@@ -263,7 +278,7 @@ function buildHelpText(customCommands?: Record<string, string>): string {
       .filter(([name, fn]) => fn === BUILTIN_EXEC[k] && name !== k)
       .map(([name]) => `/${name}`);
     const aliasStr = aliases.length > 0 ? `、${aliases.join('、')}` : '';
-    const desc = k === 'status' ? 'git status + 最近提交'
+    const desc = k === 'gs' ? 'git status + 最近提交'
       : k === 'diff' ? 'git diff'
       : k === 'log' ? 'git log'
       : k === 'branch' ? '分支列表'
@@ -286,6 +301,11 @@ function buildHelpText(customCommands?: Record<string, string>): string {
 ⚡ 快速执行（不走 Claude）：
 ${execLines}
 
+📊 状态与历史：
+  /status、/st          larkcc 运行状态
+  /usage [today|week|month|all]、/u    使用统计
+  /sessions、/ss        会话历史（resume <id> / new / delete <id>）
+
 💬 Claude 快捷方式：
 ${promptLines}
 
@@ -299,10 +319,12 @@ ${promptLines}
 // ── 主处理函数 ────────────────────────────────────────────────
 
 export interface CommandResult {
-  type: "exec" | "prompt" | "unknown" | "help" | "multifile_start" | "multifile_done" | "exec_confirm";
+  type: "exec" | "prompt" | "unknown" | "help" | "multifile_start" | "multifile_done" | "exec_confirm" | "card";
   output?: string;
   prompt?: string;
   cmd?: string;        // 待确认的命令（exec_confirm 时使用）
+  cardType?: "status" | "usage" | "sessions";  // type === "card" 时的子类型
+  cardArgs?: string;   // type === "card" 时的参数（如 "today"、"resume abc"）
 }
 
 export interface CommandContext {
@@ -341,7 +363,16 @@ export function parseCommand(
     }
   }
 
-  // 1. 内置 EXEC 命令（优先级最高，不可覆盖）
+  // 1. 内置卡片命令（最高优先级，独立分类）
+  if (BUILTIN_CARD_CMD[cmd]) {
+    return {
+      type: "card",
+      cardType: BUILTIN_CARD_CMD[cmd],
+      cardArgs: args,
+    };
+  }
+
+  // 2. 内置 EXEC 命令（不可覆盖）
   if (BUILTIN_EXEC[cmd]) {
     logger.info(`Running /${cmd}...`);
     const output = BUILTIN_EXEC[cmd](cwd);

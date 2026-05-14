@@ -3,11 +3,11 @@
  */
 
 // 原子展示组件
-export { markdown, hr, plainText, textTag, standardIcon, customIcon } from "./elements.js";
-export type { MarkdownOptions } from "./elements.js";
+export { markdown, hr, plainText, textTag, standardIcon, customIcon, button, actionPayload } from "./elements.js";
+export type { MarkdownOptions, ButtonType } from "./elements.js";
 
 // 容器组件
-export { collapsiblePanel, column, columnSet, buildThinkingPanel, buildToolPanels } from "./containers.js";
+export { collapsiblePanel, column, columnSet, buttonRow, buildThinkingPanel, buildToolPanels } from "./containers.js";
 export type { CollapsiblePanelOptions, ToolResultEntry } from "./containers.js";
 
 // Truncation constants (in containers.ts)
@@ -24,6 +24,9 @@ export type { FooterStats } from "./footer.js";
 // 整卡构建
 export { buildCard, buildSimpleCard, buildStatusCard, buildMarkdownCard } from "./compose.js";
 export type { BuildCardOptions, CardBuildOptions } from "./compose.js";
+
+// 动作按钮（卡片快捷按钮）
+export { buildActionButtons } from "./actions.js";
 
 // 任务面板卡片
 export { buildTaskPanelCard } from "./task-panel.js";

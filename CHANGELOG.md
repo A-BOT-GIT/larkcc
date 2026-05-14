@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-05-14
+
+### Added
+
+- New `/status` and `/st` commands: shows runtime status card (cwd, profile, current session, startup time, message count, PID)
+- New `/usage`, `/u` commands with `[today|week|month|all]` ranges: aggregated token / tool-call / conversation stats stored in `~/.larkcc/usage-{profile}.jsonl`. By-model breakdown included. **No cost calculation** — raw token data only
+- New `/sessions`, `/ss` commands with subcommands `resume <id>` / `new` / `delete <id>`: list and switch between historical Claude sessions (id supports 6-char short prefix). Backed by `~/.larkcc/sessions-{profile}.jsonl`
+- Card quick-action buttons appended to every final reply card: 🔄 Retry · ➡️ Continue · 📋 Copy · 🆕 New Session
+- `card.action.trigger` event handler (`src/card-action-handler.ts`) routes button clicks; resume_session / delete_session buttons on the sessions list card
+- New shared modules: `src/usage-stats.ts`, `src/session-history.ts`, `src/card/status-card.ts`, `src/card/sessions-card.ts`, `src/card/actions.ts`, `src/card-action-handler.ts`
+- New card primitives: `button`, `actionPayload`, `buttonRow`, `buildActionButtons`
+
+### Changed
+
+- `BUILTIN_EXEC` `/status` and `/s` (git status shortcut) renamed to `/gs` and `/gst` to free up `/status` and `/s`-prefix for the new card command. Help text updated.
+- `createMessageHandler` now returns `{ handler, runAgentForChat, isProcessing, getLastPrompt, setLastPrompt }` instead of just the handler function. `app.ts` updated accordingly.
+- `claude.ts:processResultEvent` now records to `usage-{profile}.jsonl` and `sessions-{profile}.jsonl` at the end (zero-intrusion: failures only log, do not break main flow). Cache-related token fields surfaced from SDK `modelUsage` (`cacheReadInputTokens`, `cacheCreationInputTokens`)
+- `session.ts:setSession` now also touches `lastUsedAt` in session-history (no msgCount bump, to avoid double-count)
+- `touchSession` accepts third arg as `string | { model?, bump? }` for flexible call sites
+
 ## [0.13.0] - 2026-05-12
 
 ### Changed

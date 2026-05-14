@@ -14,6 +14,7 @@ import { getSession, setSession, getChatId } from "./session.js";
 import { logger } from "./logger.js";
 import { VERSION } from "./version.js";
 import { createMessageHandler } from "./message-handler.js";
+import { createCardActionHandler } from "./card-action-handler.js";
 
 const CLAUDE_SETTINGS_PATH = path.join(os.homedir(), ".claude", "settings.json");
 const LOCK_DIR = path.join(os.homedir(), ".larkcc");
@@ -326,7 +327,7 @@ export async function startApp(
   logger.info(`Session:  ${continueSession ? "continue" : "new"}`);
   logger.info("Connecting to Feishu...");
 
-  const handler = createMessageHandler({
+  const handlerCtx = createMessageHandler({
     client,
     config,
     profile,
@@ -336,12 +337,22 @@ export async function startApp(
     commandContext,
   });
 
+  const cardActionHandler = createCardActionHandler({
+    client,
+    config,
+    profile,
+    runAgentForChat: handlerCtx.runAgentForChat,
+    getLastPrompt: handlerCtx.getLastPrompt,
+    setLastPrompt: handlerCtx.setLastPrompt,
+  });
+
   try {
     wsClient.start({
       eventDispatcher: new lark.EventDispatcher({}).register({
-        "im.message.receive_v1": handler,
+        "im.message.receive_v1": handlerCtx.handler,
         "im.message.reaction.created_v1": () => {},
         "im.message.reaction.deleted_v1": () => {},
+        "card.action.trigger": cardActionHandler,
       }),
     });
   } catch (e) {

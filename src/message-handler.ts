@@ -6,9 +6,15 @@ import type { DownloadedFile } from "./client/index.js";
 import { runAgent, ImageInput } from "./claude.js";
 import { LarkccConfig, saveOwnerOpenId } from "./config.js";
 import { parseCommand, CommandContext, runCmd } from "./commands.js";
-import { getSession, setSession, getChatId, saveChatId } from "./session.js";
+import { getSession, setSession, getChatId, saveChatId, clearSession } from "./session.js";
 import { logger } from "./logger.js";
 import * as multifile from "./multifile.js";
+import { buildLarkccStatusCard, buildUsageCard } from "./card/status-card.js";
+import type { UsageRange } from "./card/status-card.js";
+import { buildSessionsCard } from "./card/sessions-card.js";
+import { loadUsage } from "./usage-stats.js";
+import { listSessions, findSessionByShortId, deleteSession } from "./session-history.js";
+import { replyMessage } from "./client/lark.js";
 
 // 待确认的 EXEC 命令
 interface PendingExec { cmd: string; cwd: string; timestamp: number; }
@@ -28,7 +34,21 @@ export interface MessageHandlerContext {
   commandContext: CommandContext;
 }
 
-export function createMessageHandler(ctx: MessageHandlerContext) {
+export interface RunAgentForChatOptions {
+  prompt: string;
+  chatId: string;
+  rootMsgId: string;
+}
+
+export interface MessageHandlerResult {
+  handler: (data: any) => Promise<void>;
+  runAgentForChat: (opts: RunAgentForChatOptions) => Promise<void>;
+  isProcessing: () => boolean;
+  getLastPrompt: (chatId: string) => string | undefined;
+  setLastPrompt: (chatId: string, prompt: string) => void;
+}
+
+export function createMessageHandler(ctx: MessageHandlerContext): MessageHandlerResult {
   const { client, config, profile, cwd, botOpenId, startupTime, commandContext } = ctx;
 
   const DEDUPE_WINDOW_MS = 30_000;
@@ -43,10 +63,203 @@ export function createMessageHandler(ctx: MessageHandlerContext) {
   const recentMessages = new Map<string, number>();
   const pendingExecConfirm = new Map<string, PendingExec>();
 
+  // 运行时统计
+  let messageCount = 0;
+  // 每个 chat 最近一次的用户 prompt（供卡片快捷按钮 retry 使用）
+  const lastPromptByChat = new Map<string, string>();
+
   const getOwnerOpenId = () => config.feishu.owner_open_id;
   const profileLabel = profile ? ` [${profile}]` : "";
 
-  return async (data: any) => {
+  // ── 卡片命令处理 ──────────────────────────────────────────
+  async function replyCard(rootMsgId: string, card: Record<string, unknown>): Promise<void> {
+    try {
+      await replyMessage(client, rootMsgId, {
+        content: JSON.stringify(card),
+        msgType: "interactive",
+      });
+    } catch (e) {
+      logger.warn(`[card] reply failed: ${e}`);
+    }
+  }
+
+  function rangeToBounds(range: UsageRange): { since?: number; label: string } {
+    const now = new Date();
+    if (range === "today") {
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000;
+      return { since: start, label: "今日" };
+    }
+    if (range === "week") {
+      const start = Math.floor(Date.now() / 1000) - 7 * 24 * 3600;
+      return { since: start, label: "近 7 天" };
+    }
+    if (range === "month") {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1).getTime() / 1000;
+      return { since: start, label: "本月" };
+    }
+    return { label: "累计" };  // all
+  }
+
+  async function handleCardCommand(
+    cardType: "status" | "usage" | "sessions",
+    args: string,
+    chatId: string,
+    rootMsgId: string,
+  ): Promise<void> {
+    if (cardType === "status") {
+      const sid = getSession();
+      let sMsgCount: number | undefined;
+      if (sid) {
+        const records = listSessions(profile, 200);
+        sMsgCount = records.find(r => r.sessionId === sid)?.msgCount;
+      }
+      const card = buildLarkccStatusCard({
+        cwd,
+        profile: profile ?? "default",
+        sessionId: sid,
+        sessionMsgCount: sMsgCount,
+        startupTime,
+        messageCount,
+        pid: process.pid,
+        cardTitle: "larkcc 状态",
+        iconImgKey: config.header_icon_img_key,
+      });
+      await replyCard(rootMsgId, card);
+      return;
+    }
+
+    if (cardType === "usage") {
+      const range: UsageRange = ((): UsageRange => {
+        const a = args.toLowerCase().trim();
+        if (a === "today") return "today";
+        if (a === "week") return "week";
+        if (a === "month") return "month";
+        if (a === "all") return "all";
+        return "today";
+      })();
+
+      const { since, label } = rangeToBounds(range);
+      const todayStart = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime() / 1000;
+      const todayEntries = loadUsage(profile, todayStart);
+      const rangeEntries = range === "today" ? todayEntries : loadUsage(profile, since);
+
+      const card = buildUsageCard({
+        range,
+        todayEntries,
+        rangeEntries,
+        rangeLabel: label,
+        cardTitle: "📊 使用统计",
+        iconImgKey: config.header_icon_img_key,
+      });
+      await replyCard(rootMsgId, card);
+      return;
+    }
+
+    if (cardType === "sessions") {
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      const sub = (parts[0] ?? "").toLowerCase();
+
+      if (!sub) {
+        // 列表
+        const records = listSessions(profile, 10);
+        const card = buildSessionsCard({
+          records,
+          currentSessionId: getSession(),
+          iconImgKey: config.header_icon_img_key,
+        });
+        await replyCard(rootMsgId, card);
+        return;
+      }
+
+      if (sub === "new" || sub === "n") {
+        clearSession();
+        await sendText(client, chatId, "✅ 新会话已开启，下一条消息将以全新上下文开始。");
+        return;
+      }
+
+      if (sub === "resume" || sub === "r") {
+        const sid = parts[1];
+        if (!sid) {
+          await sendText(client, chatId, "用法：/sessions resume <id>（id 可填前 6 位）");
+          return;
+        }
+        const found = findSessionByShortId(profile, sid);
+        if (!found) {
+          await sendText(client, chatId, `❌ 未找到会话：${sid}`);
+          return;
+        }
+        setSession(found.sessionId);
+        await sendText(client, chatId, `✅ 已切换到会话 \`${found.sessionId.slice(0, 8)}\`，下一条消息将续接。`);
+        return;
+      }
+
+      if (sub === "delete" || sub === "d" || sub === "del") {
+        const sid = parts[1];
+        if (!sid) {
+          await sendText(client, chatId, "用法：/sessions delete <id>（id 可填前 6 位）");
+          return;
+        }
+        const found = findSessionByShortId(profile, sid);
+        if (!found) {
+          await sendText(client, chatId, `❌ 未找到会话：${sid}`);
+          return;
+        }
+        const ok = deleteSession(profile, found.sessionId);
+        await sendText(client, chatId, ok ? `🗑 已删除会话 \`${found.sessionId.slice(0, 8)}\`` : "❌ 删除失败");
+        return;
+      }
+
+      await sendText(client, chatId, `未知子命令：${sub}\n可用：/sessions [resume|new|delete] <id>`);
+      return;
+    }
+  }
+
+  // ── runAgent 包装：被卡片按钮等场景共享 ─────────────────────
+  async function runAgentForChat(opts: RunAgentForChatOptions): Promise<void> {
+    const { prompt, chatId, rootMsgId } = opts;
+
+    if (processing) {
+      const elapsed = Math.round((Date.now() - processingStartedAt) / 1000);
+      await sendText(client, chatId, `⏳ 上一条消息还在处理中（已${elapsed}秒），发送 /stop 可强制中断`);
+      return;
+    }
+
+    processing = true;
+    processingStartedAt = Date.now();
+    isTimedOut = false;
+    currentAbortController = new AbortController();
+
+    const timeoutMs = config.processing_timeout_ms ?? 30 * 60 * 1000;
+    processingTimeoutTimer = setTimeout(() => {
+      if (processing && currentAbortController) {
+        logger.warn(`Processing timeout (${timeoutMs / 1000}s), aborting...`);
+        isTimedOut = true;
+        currentAbortController.abort();
+      }
+    }, timeoutMs);
+
+    try {
+      messageCount++;
+      lastPromptByChat.set(chatId, prompt);
+      await runAgent(prompt, cwd, config, client, chatId, rootMsgId, undefined, currentAbortController ?? undefined, profile, startupTime);
+      if (processingTimeoutTimer) clearTimeout(processingTimeoutTimer);
+      if (isTimedOut) {
+        await sendText(client, chatId, `⏰ 处理超时（${Math.round(timeoutMs / 60000)}分钟），已终止。`);
+      }
+    } catch (err) {
+      if (processingTimeoutTimer) clearTimeout(processingTimeoutTimer);
+      logger.error(`Agent error (button): ${String(err)}`);
+      await sendText(client, chatId, `❌ 出错了：${String(err)}`);
+    } finally {
+      processing = false;
+      processingStartedAt = 0;
+      currentAbortController = null;
+      processingTimeoutTimer = null;
+      isTimedOut = false;
+    }
+  }
+
+  const handler = async (data: any) => {
     if (!data?.message || !data?.sender) return;
     const msg      = data.message;
     const senderId = data.sender.sender_id?.open_id ?? "";
@@ -329,6 +542,11 @@ export function createMessageHandler(ctx: MessageHandlerContext) {
           return;
         }
 
+        if (result.type === "card" && result.cardType) {
+          await handleCardCommand(result.cardType, result.cardArgs ?? "", chatId, msg.message_id);
+          return;
+        }
+
         if (result.type === "exec_confirm" && result.cmd) {
           const warningMsg = `⚠️ 危险命令检测\n\n${result.output}\n\n命令：\n\`\`\`\n${result.cmd}\n\`\`\`\n\n确认执行？回复 y 确认，回复 n 取消`;
           await sendText(client, chatId, warningMsg);
@@ -393,6 +611,8 @@ export function createMessageHandler(ctx: MessageHandlerContext) {
         }
       }
 
+      messageCount++;
+      lastPromptByChat.set(chatId, finalPrompt);
       const result = await runAgent(finalPrompt, cwd, config, client, chatId, msg.message_id, images.length > 0 ? images : undefined, currentAbortController ?? undefined, profile, startupTime);
       if (processingTimeoutTimer) clearTimeout(processingTimeoutTimer);
       if (reactionId) {
@@ -438,5 +658,13 @@ export function createMessageHandler(ctx: MessageHandlerContext) {
       processingTimeoutTimer = null;
       isTimedOut = false;
     }
+  };
+
+  return {
+    handler,
+    runAgentForChat,
+    isProcessing: () => processing,
+    getLastPrompt: (chatId: string) => lastPromptByChat.get(chatId),
+    setLastPrompt: (chatId: string, prompt: string) => { lastPromptByChat.set(chatId, prompt); },
   };
 }

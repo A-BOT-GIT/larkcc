@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { touchSession } from "./session-history.js";
 
 const STATE_DIR = path.join(os.homedir(), ".larkcc");
 
@@ -45,6 +46,8 @@ export function setSession(sessionId: string): void {
   const state = loadState(currentProfile);
   state.session_id = sessionId;
   saveState(state, currentProfile);
+  // 同步更新会话历史的 lastUsedAt（不递增 msgCount，避免双计）
+  touchSession(currentProfile, sessionId, { bump: false });
 }
 
 export function clearSession(): void {

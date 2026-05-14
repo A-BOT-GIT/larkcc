@@ -52,3 +52,35 @@ export function standardIcon(token: string, size?: string): Record<string, unkno
 export function customIcon(imgKey: string): Record<string, unknown> {
   return { tag: "custom_icon", img_key: imgKey };
 }
+
+// ── 按钮（button） ─────────────────────────────────────────
+
+export type ButtonType = "primary" | "default" | "danger" | "text";
+
+/**
+ * 构建卡片按钮（card v2 schema）
+ * - 点击触发 `card.action.trigger_v1` 事件，`action.value` 为传入的 value 对象
+ * - 通过 behaviors:callback 让飞书把 value 透传回服务器
+ */
+export function button(
+  text: string,
+  value: Record<string, unknown>,
+  type: ButtonType = "default",
+): Record<string, unknown> {
+  return {
+    tag: "button",
+    text: plainText(text),
+    type,
+    behaviors: [{ type: "callback", value }],
+  };
+}
+
+/**
+ * 构建带类型字段的 action payload，便于 card-action-handler 路由
+ */
+export function actionPayload(
+  type: string,
+  extra?: Record<string, unknown>,
+): Record<string, unknown> {
+  return { type, ...(extra ?? {}) };
+}

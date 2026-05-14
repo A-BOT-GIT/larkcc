@@ -25,7 +25,7 @@ import { formatDuration } from "../format/time.js";
 import { replyMessage } from "./lark.js";
 import { STREAMING_TRUNCATE, FlushController } from "./flush.js";
 import type { FlushControllerOptions } from "./flush.js";
-import { buildCard, markdown, hr, column, columnSet, buildThinkingPanel, buildToolPanels, buildHeader, buildFooterElement, buildStatsTags } from "../card/index.js";
+import { buildCard, markdown, hr, column, columnSet, buildThinkingPanel, buildToolPanels, buildHeader, buildFooterElement, buildStatsTags, buildActionButtons } from "../card/index.js";
 import type { ToolResultEntry } from "../card/index.js";
 import { replyFinalCard, prepareOverflowContext } from "./message.js";
 import type { ReplyContext, CompletionOptions } from "./message.js";
@@ -592,6 +592,9 @@ export class CardKitController {
         ]),
       ]));
     }
+
+    // 末尾追加快捷动作按钮行
+    elements.push(buildActionButtons(content));
 
     return buildCard({
       elements,

@@ -86,7 +86,17 @@ export function columnSet(columns: Record<string, unknown>[], options?: ColumnSe
   };
 }
 
-// ── 业务面板：Thinking ──────────────────────────────────────
+// ── 按钮行（buttonRow） ────────────────────────────────────
+
+/**
+ * 把多个 button 包成一行均分宽度的 columnSet。
+ */
+export function buttonRow(buttons: Record<string, unknown>[]): Record<string, unknown> {
+  return columnSet(
+    buttons.map(b => column([b])),
+    { flex_mode: "stretch" },
+  );
+}
 
 interface ThinkingPanelOptions {
   thinking: string;
