@@ -54,11 +54,17 @@ function buildReplyContext(
   };
 }
 
-function buildFooterMetadata(elapsedSeconds: number, model?: string, tokens?: number, imageFailed?: number): string {
+function buildFooterMetadata(elapsedSeconds: number, model?: string, tokens?: number, imageFailed?: number, sessionId?: string, startupTime?: number): string {
   const parts = [`⏱ ${formatDuration(elapsedSeconds)}`];
   if (model) parts.push(model);
   if (tokens) parts.push(`${tokens.toLocaleString()} tokens`);
   if (imageFailed && imageFailed > 0) parts.push(`⚠️ ${imageFailed} 张图片上传失败`);
+  if (sessionId) parts.push(`🔗 ${sessionId}`);
+  if (startupTime) {
+    const startStr = new Date(startupTime).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+    const larkDuration = formatDuration((Date.now() - startupTime) / 1000);
+    parts.push(`🕐 ${startStr} 起 · 运行 ${larkDuration}`);
+  }
   return parts.join(' · ');
 }
 
@@ -88,6 +94,7 @@ interface AgentContext {
   cardkitCtrl: CardKitController | null;
   taskPanelCtrl: TaskPanelController | null;
   startTime: number;
+  startupTime: number;
   // 可变状态
   textBuffer: string[];
   thinkingBuffer: string[];
@@ -268,13 +275,15 @@ async function processResultEvent(ctx: AgentContext, event: SDKResultEvent): Pro
     }
   }
 
-  const metadata = buildFooterMetadata(elapsedSeconds, model, tokens, imageFailedCount);
+  const metadata = buildFooterMetadata(elapsedSeconds, model, tokens, imageFailedCount, event.session_id ?? ctx.replyContext.sessionId, ctx.startupTime);
 
   const completeOptions: CompletionOptions = {
     metadata,
     thinking,
     reasoningElapsedMs,
     cardTitle: ctx.config.card_title,
+    sessionId: event.session_id ?? ctx.replyContext.sessionId,
+    startupTime: ctx.startupTime,
     stats: {
       model,
       inputTokens,
@@ -309,6 +318,7 @@ export async function runAgent(
   images?: ImageInput[],
   abortController?: AbortController,
   profile?: string,
+  startupTime?: number,
 ): Promise<RunAgentResult> {
   const sessionId = getSession();
   const replyContext = buildReplyContext(config, profile, cwd, chatId, rootMsgId);
@@ -361,6 +371,7 @@ export async function runAgent(
     config, client, chatId, rootMsgId, replyContext, isCardkitMode,
     streamingCard, cardkitCtrl, taskPanelCtrl,
     startTime: Date.now(),
+    startupTime: startupTime ?? Date.now(),
     textBuffer: [],
     thinkingBuffer: [],
     reasoningStartTime: null,

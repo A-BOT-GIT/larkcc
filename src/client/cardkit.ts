@@ -21,10 +21,11 @@
 import * as lark from "@larksuiteoapi/node-sdk";
 import { optimizeForCard, truncateSafely } from "../format/card-optimize.js";
 import { stripThinking } from "../format/thinking.js";
+import { formatDuration } from "../format/time.js";
 import { replyMessage } from "./lark.js";
 import { STREAMING_TRUNCATE, FlushController } from "./flush.js";
 import type { FlushControllerOptions } from "./flush.js";
-import { buildCard, markdown, hr, buildThinkingPanel, buildToolPanels, buildHeader, buildFooterElement, buildStatsTags } from "../card/index.js";
+import { buildCard, markdown, hr, column, columnSet, buildThinkingPanel, buildToolPanels, buildHeader, buildFooterElement, buildStatsTags } from "../card/index.js";
 import type { ToolResultEntry } from "../card/index.js";
 import { replyFinalCard, prepareOverflowContext } from "./message.js";
 import type { ReplyContext, CompletionOptions } from "./message.js";
@@ -251,7 +252,7 @@ export class CardKitController {
       ...buildToolPanels(options?.toolResults ?? []),
     ];
     try {
-      const finalCardJson = this.buildFinalCard(optimized, extraElements, options?.stats);
+      const finalCardJson = this.buildFinalCard(optimized, extraElements, options?.stats, options?.sessionId, options?.startupTime);
       await this.closeAndFinalize(finalCardJson);
     } catch (error) {
       console.error("[CARDKIT] Final update failed, sending as new message:", error);
@@ -562,7 +563,7 @@ export class CardKitController {
   /**
    * 构建最终卡片 JSON
    */
-  private buildFinalCard(content: string, extraElements?: any[], stats?: CompletionOptions['stats']): any {
+  private buildFinalCard(content: string, extraElements?: any[], stats?: CompletionOptions['stats'], sessionId?: string, startupTime?: number): any {
     const elements: any[] = [
       ...(extraElements ?? []),
       markdown(content, { element_id: this.streamElementId }),
@@ -575,6 +576,21 @@ export class CardKitController {
     });
     if (footer) {
       elements.push(hr(), footer);
+    }
+
+    if (sessionId || startupTime) {
+      const infoParts: string[] = [];
+      if (sessionId) infoParts.push(`🔗 ${sessionId}`);
+      if (startupTime) {
+        const startStr = new Date(startupTime).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+        const larkDuration = formatDuration((Date.now() - startupTime) / 1000);
+        infoParts.push(`🕐 ${startStr} 起 · 运行 ${larkDuration}`);
+      }
+      elements.push(columnSet([
+        column([
+          markdown(`<font color='grey'>${infoParts.join(' · ')}</font>`, { text_size: "notation" }),
+        ]),
+      ]));
     }
 
     return buildCard({

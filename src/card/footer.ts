@@ -14,25 +14,23 @@ export interface FooterStats {
 }
 
 export function buildFooterElement(stats: FooterStats): Record<string, unknown> | null {
-  const columns: Record<string, unknown>[] = [];
+  const parts: string[] = [];
 
   if (stats.inputTokens != null) {
-    columns.push(column([
-      markdown(`<font color='grey'>📥 ${stats.inputTokens.toLocaleString()}</font>`, { text_size: "notation" }),
-    ]));
+    parts.push(`📥 ${stats.inputTokens.toLocaleString()}`);
   }
   if (stats.outputTokens != null) {
-    columns.push(column([
-      markdown(`<font color='grey'>📤 ${stats.outputTokens.toLocaleString()}</font>`, { text_size: "notation" }),
-    ]));
+    parts.push(`📤 ${stats.outputTokens.toLocaleString()}`);
   }
   if (stats.toolCount != null && stats.toolCount > 0) {
-    columns.push(column([
-      markdown(`<font color='grey'>🔧 ${stats.toolCount}</font>`, { text_size: "notation" }),
-    ]));
+    parts.push(`🔧 ${stats.toolCount}`);
   }
 
-  if (columns.length === 0) return null;
+  if (parts.length === 0) return null;
 
-  return columnSet(columns);
+  return columnSet([
+    column([
+      markdown(`<font color='grey'>${parts.join(' · ')}</font>`, { text_size: "notation" }),
+    ]),
+  ]);
 }

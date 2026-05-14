@@ -393,7 +393,7 @@ export function createMessageHandler(ctx: MessageHandlerContext) {
         }
       }
 
-      const result = await runAgent(finalPrompt, cwd, config, client, chatId, msg.message_id, images.length > 0 ? images : undefined, currentAbortController ?? undefined, profile);
+      const result = await runAgent(finalPrompt, cwd, config, client, chatId, msg.message_id, images.length > 0 ? images : undefined, currentAbortController ?? undefined, profile, startupTime);
       if (processingTimeoutTimer) clearTimeout(processingTimeoutTimer);
       if (reactionId) {
         await client.im.messageReaction.delete({

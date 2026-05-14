@@ -27,6 +27,8 @@ export interface ReplyFinalOptions {
   thinking?: string;
   reasoningElapsedMs?: number;
   cardTitle?: string;
+  sessionId?: string;
+  startupTime?: number;
   stats?: {
     model?: string;
     inputTokens?: number;
