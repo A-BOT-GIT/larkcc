@@ -4,6 +4,7 @@ import os from "os";
 import { sendText, downloadImage, downloadFile } from "./client/index.js";
 import type { DownloadedFile } from "./client/index.js";
 import { runAgent, ImageInput } from "./claude.js";
+import type { RunAgentResult } from "./claude.js";
 import { LarkccConfig, saveOwnerOpenId } from "./config.js";
 import { parseCommand, CommandContext, runCmd } from "./commands.js";
 import { getSession, setSession, getChatId, saveChatId, clearSession } from "./session.js";
@@ -38,11 +39,12 @@ export interface RunAgentForChatOptions {
   prompt: string;
   chatId: string;
   rootMsgId: string;
+  onCardCreated?: () => void;
 }
 
 export interface MessageHandlerResult {
   handler: (data: any) => Promise<void>;
-  runAgentForChat: (opts: RunAgentForChatOptions) => Promise<void>;
+  runAgentForChat: (opts: RunAgentForChatOptions) => Promise<RunAgentResult | "errored">;
   isProcessing: () => boolean;
   getLastPrompt: (chatId: string) => string | undefined;
   setLastPrompt: (chatId: string, prompt: string) => void;
@@ -215,13 +217,13 @@ export function createMessageHandler(ctx: MessageHandlerContext): MessageHandler
   }
 
   // ── runAgent 包装：被卡片按钮等场景共享 ─────────────────────
-  async function runAgentForChat(opts: RunAgentForChatOptions): Promise<void> {
-    const { prompt, chatId, rootMsgId } = opts;
+  async function runAgentForChat(opts: RunAgentForChatOptions): Promise<RunAgentResult | "errored"> {
+    const { prompt, chatId, rootMsgId, onCardCreated } = opts;
 
     if (processing) {
       const elapsed = Math.round((Date.now() - processingStartedAt) / 1000);
       await sendText(client, chatId, `⏳ 上一条消息还在处理中（已${elapsed}秒），发送 /stop 可强制中断`);
-      return;
+      return "errored";
     }
 
     processing = true;
@@ -241,15 +243,17 @@ export function createMessageHandler(ctx: MessageHandlerContext): MessageHandler
     try {
       messageCount++;
       lastPromptByChat.set(chatId, prompt);
-      await runAgent(prompt, cwd, config, client, chatId, rootMsgId, undefined, currentAbortController ?? undefined, profile, startupTime);
+      const result = await runAgent(prompt, cwd, config, client, chatId, rootMsgId, undefined, currentAbortController ?? undefined, profile, startupTime, onCardCreated);
       if (processingTimeoutTimer) clearTimeout(processingTimeoutTimer);
       if (isTimedOut) {
         await sendText(client, chatId, `⏰ 处理超时（${Math.round(timeoutMs / 60000)}分钟），已终止。`);
       }
+      return result;
     } catch (err) {
       if (processingTimeoutTimer) clearTimeout(processingTimeoutTimer);
       logger.error(`Agent error (button): ${String(err)}`);
       await sendText(client, chatId, `❌ 出错了：${String(err)}`);
+      return "errored";
     } finally {
       processing = false;
       processingStartedAt = 0;

@@ -66,13 +66,18 @@ export function button(
   text: string,
   value: Record<string, unknown>,
   type: ButtonType = "default",
+  elementId?: string,
+  disabled?: boolean,
 ): Record<string, unknown> {
-  return {
+  const el: Record<string, unknown> = {
     tag: "button",
     text: plainText(text),
     type,
     behaviors: [{ type: "callback", value }],
   };
+  if (elementId) el.element_id = elementId;
+  if (disabled) el.disabled = true;
+  return el;
 }
 
 /**

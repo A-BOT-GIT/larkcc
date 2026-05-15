@@ -14,12 +14,13 @@ import { logger } from "./logger.js";
 import { clearSession, setSession } from "./session.js";
 import { deleteSession, findSessionByShortId } from "./session-history.js";
 import type { LarkccConfig } from "./config.js";
+import type { RunAgentResult } from "./claude.js";
 
 export interface CardActionDeps {
   client: lark.Client;
   config: LarkccConfig;
   profile: string | undefined;
-  runAgentForChat: (opts: { prompt: string; chatId: string; rootMsgId: string }) => Promise<void>;
+  runAgentForChat: (opts: { prompt: string; chatId: string; rootMsgId: string; onCardCreated?: () => void }) => Promise<RunAgentResult | "errored">;
   getLastPrompt: (chatId: string) => string | undefined;
   setLastPrompt: (chatId: string, prompt: string) => void;
 }
@@ -84,6 +85,73 @@ export function createCardActionHandler(deps: CardActionDeps) {
     logger.info(`[card-action] type=${type}`);
 
     try {
+      const CARD_CREATE_TIMEOUT_MS = 2500;
+      const waitForCardOrTimeout = (run: (onCreated: () => void) => void): Promise<void> =>
+        new Promise<void>((resolve) => {
+          let done = false;
+          const finish = () => { if (!done) { done = true; resolve(); } };
+          run(finish);
+          setTimeout(finish, CARD_CREATE_TIMEOUT_MS);
+        });
+
+      // 状态指示走 rootMsgId 上的 reaction：入口 Typing → 完成 DONE / 失败 OnIt。
+      // 卡片完成后飞书对单 element 的 patch / update 会被前端回滚，所以按钮文字保持不变。
+      const runWithButtonState = (opts: {
+        prompt: string;
+        chatId: string;
+        rootMsgId: string;
+        onCreated: () => void;
+        label: string;
+      }): void => {
+        const { prompt, chatId, rootMsgId, onCreated, label } = opts;
+
+        const reactionIdPromise: Promise<string | undefined> = client.im.messageReaction
+          .create({
+            path: { message_id: rootMsgId },
+            data: { reaction_type: { emoji_type: config.reaction?.processing ?? "Typing" } },
+          })
+          .then((r) => r.data?.reaction_id)
+          .catch((e) => {
+            logger.warn(`[card-action] ${label} reaction create failed: ${String(e)}`);
+            return undefined;
+          });
+
+        void runAgentForChat({ prompt, chatId, rootMsgId, onCardCreated: onCreated })
+          .then(async (result) => {
+            const reactionId = await reactionIdPromise;
+            if (reactionId) {
+              await client.im.messageReaction
+                .delete({ path: { message_id: rootMsgId, reaction_id: reactionId } })
+                .catch(() => {});
+            }
+            const finalEmoji =
+              result === "completed"
+                ? (config.reaction?.done ?? "DONE")
+                : (config.reaction?.error ?? "OnIt");
+            await client.im.messageReaction
+              .create({
+                path: { message_id: rootMsgId },
+                data: { reaction_type: { emoji_type: finalEmoji } },
+              })
+              .catch((e) => logger.warn(`[card-action] ${label} reaction final failed: ${String(e)}`));
+          })
+          .catch(async (err) => {
+            logger.error(`[card-action] ${label} runAgent failed: ${String(err)}`);
+            const reactionId = await reactionIdPromise;
+            if (reactionId) {
+              await client.im.messageReaction
+                .delete({ path: { message_id: rootMsgId, reaction_id: reactionId } })
+                .catch(() => {});
+            }
+            await client.im.messageReaction
+              .create({
+                path: { message_id: rootMsgId },
+                data: { reaction_type: { emoji_type: config.reaction?.error ?? "OnIt" } },
+              })
+              .catch(() => {});
+          });
+      };
+
       switch (type) {
         case "retry": {
           const last = getLastPrompt(chatId);
@@ -91,9 +159,14 @@ export function createCardActionHandler(deps: CardActionDeps) {
             await sendText(client, chatId, "❌ 没有可重试的上一条 prompt。");
             return;
           }
-          // fire-and-forget：飞书卡片回调要求 3s 内同步响应，runAgent 是 long-running
-          runAgentForChat({ prompt: last, chatId, rootMsgId }).catch((err) => {
-            logger.error(`[card-action] retry runAgent failed: ${String(err)}`);
+          await waitForCardOrTimeout((onCreated) => {
+            runWithButtonState({
+              prompt: last,
+              chatId,
+              rootMsgId,
+              onCreated,
+              label: "retry",
+            });
           });
           return;
         }
@@ -101,8 +174,14 @@ export function createCardActionHandler(deps: CardActionDeps) {
         case "continue": {
           const prompt = "继续";
           setLastPrompt(chatId, prompt);
-          runAgentForChat({ prompt, chatId, rootMsgId }).catch((err) => {
-            logger.error(`[card-action] continue runAgent failed: ${String(err)}`);
+          await waitForCardOrTimeout((onCreated) => {
+            runWithButtonState({
+              prompt,
+              chatId,
+              rootMsgId,
+              onCreated,
+              label: "continue",
+            });
           });
           return;
         }

@@ -118,6 +118,9 @@ export class CardKitController {
 
   private headerIconImgKey?: string;
 
+  private onCardCreated?: () => void;
+  private cardCreatedNotified = false;
+
   constructor(params: {
     client: lark.Client;
     rootMsgId: string;
@@ -126,6 +129,7 @@ export class CardKitController {
     context: ReplyContext;
     intervalMs: number;
     headerIconImgKey?: string;
+    onCardCreated?: () => void;
   }) {
     this.client = params.client;
     this.rootMsgId = params.rootMsgId;
@@ -133,6 +137,7 @@ export class CardKitController {
     this.thinkingEnabled = params.thinkingEnabled;
     this.context = params.context;
     this.headerIconImgKey = params.headerIconImgKey;
+    this.onCardCreated = params.onCardCreated;
 
     this.flushCtrl = new FlushController({
       minIntervalMs: params.intervalMs,
@@ -363,8 +368,12 @@ export class CardKitController {
    * - 单元素架构：只有 streaming_content，工具状态作为前缀拼接
    */
   private async createCardEntity(): Promise<void> {
+    const initElements: Record<string, unknown>[] = [
+      markdown("", { element_id: this.streamElementId }),
+    ];
+
     const cardJson = buildCard({
-      elements: [markdown("", { element_id: this.streamElementId })],
+      elements: initElements,
       config: {
         streaming_mode: true,
         wide_screen_mode: true,
@@ -413,6 +422,11 @@ export class CardKitController {
     }
 
     console.error(`[CARDKIT] Card created: ${this.cardId}`);
+
+    if (!this.cardCreatedNotified && this.onCardCreated) {
+      this.cardCreatedNotified = true;
+      try { this.onCardCreated(); } catch (e) { console.error("[CARDKIT] onCardCreated callback error:", e); }
+    }
   }
 
   /**
@@ -594,7 +608,7 @@ export class CardKitController {
     }
 
     // 末尾追加快捷动作按钮行
-    elements.push(buildActionButtons(content));
+    elements.push(buildActionButtons(content, this.cardId ?? undefined));
 
     return buildCard({
       elements,

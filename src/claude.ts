@@ -360,6 +360,7 @@ export async function runAgent(
   abortController?: AbortController,
   profile?: string,
   startupTime?: number,
+  onCardCreated?: () => void,
 ): Promise<RunAgentResult> {
   const sessionId = getSession();
   const replyContext = buildReplyContext(config, profile, cwd, chatId, rootMsgId);
@@ -377,6 +378,7 @@ export async function runAgent(
       context: replyContext,
       intervalMs: config.streaming?.flush_interval_ms || 300,
       headerIconImgKey: config.header_icon_img_key,
+      onCardCreated,
     });
   }
 
