@@ -21,6 +21,8 @@ import { CardKitController } from "./client/cardkit.js";
 import { TaskPanelController } from "./client/task-panel-ctrl.js";
 import { TOOL_LABELS } from "./shared/tool-labels.js";
 import { findClaudeBinary } from "./shared/claude-binary.js";
+import { recordUsage } from "./usage-stats.js";
+import { recordSession, touchSession } from "./session-history.js";
 
 const SILENT_TOOLS = new Set(["ExitPlanMode", "TodoWrite", "TodoRead"]);
 
@@ -71,7 +73,12 @@ function buildFooterMetadata(elapsedSeconds: number, model?: string, tokens?: nu
 /** SDK result 事件的类型定义 */
 interface SDKResultEvent {
   session_id?: string;
-  modelUsage?: Record<string, { inputTokens?: number; outputTokens?: number }>;
+  modelUsage?: Record<string, {
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadInputTokens?: number;
+    cacheCreationInputTokens?: number;
+  }>;
 }
 
 export interface ImageInput {
@@ -95,6 +102,9 @@ interface AgentContext {
   taskPanelCtrl: TaskPanelController | null;
   startTime: number;
   startupTime: number;
+  profile?: string;
+  prompt: string;
+  resumedSessionId?: string;  // 进入 runAgent 时已有的 session_id（区分新建 vs 续接）
   // 可变状态
   textBuffer: string[];
   thinkingBuffer: string[];
@@ -230,6 +240,8 @@ async function processResultEvent(ctx: AgentContext, event: SDKResultEvent): Pro
   let tokens: number | undefined;
   let inputTokens: number | undefined;
   let outputTokens: number | undefined;
+  let cacheReadTokens = 0;
+  let cacheCreationTokens = 0;
   if (event.modelUsage) {
     let maxTokens = 0;
     for (const [modelName, usage] of Object.entries(event.modelUsage)) {
@@ -239,6 +251,8 @@ async function processResultEvent(ctx: AgentContext, event: SDKResultEvent): Pro
         model = modelName;
         inputTokens = usage.inputTokens;
         outputTokens = usage.outputTokens;
+        cacheReadTokens = usage.cacheReadInputTokens ?? 0;
+        cacheCreationTokens = usage.cacheCreationInputTokens ?? 0;
       }
     }
     tokens = maxTokens || undefined;
@@ -304,6 +318,33 @@ async function processResultEvent(ctx: AgentContext, event: SDKResultEvent): Pro
   } else {
     await replyFinalCard(ctx.client, ctx.chatId, ctx.rootMsgId, finalContent, ctx.replyContext, completeOptions);
   }
+
+  // ── 数据采集（零侵入接入点） ─────────────────────────────
+  const finalSessionId = event.session_id ?? ctx.replyContext.sessionId;
+  if (finalSessionId) {
+    try {
+      recordUsage(ctx.profile, {
+        ts: Math.floor(Date.now() / 1000),
+        sessionId: finalSessionId,
+        model: model ?? "unknown",
+        inputTokens: inputTokens ?? 0,
+        outputTokens: outputTokens ?? 0,
+        cacheReadTokens,
+        cacheCreationTokens,
+        toolCount: ctx.toolCallCount,
+        elapsedSec: elapsedSeconds,
+      });
+
+      const isNewSession = !ctx.resumedSessionId || ctx.resumedSessionId !== finalSessionId;
+      if (isNewSession) {
+        recordSession(ctx.profile, finalSessionId, ctx.prompt, model);
+      } else {
+        touchSession(ctx.profile, finalSessionId, model);
+      }
+    } catch (err) {
+      logger.dim(`[stats] record failed: ${err}`);
+    }
+  }
 }
 
 // ── 主入口 ────────────────────────────────────────────────────
@@ -319,6 +360,7 @@ export async function runAgent(
   abortController?: AbortController,
   profile?: string,
   startupTime?: number,
+  onCardCreated?: () => void,
 ): Promise<RunAgentResult> {
   const sessionId = getSession();
   const replyContext = buildReplyContext(config, profile, cwd, chatId, rootMsgId);
@@ -336,6 +378,7 @@ export async function runAgent(
       context: replyContext,
       intervalMs: config.streaming?.flush_interval_ms || 300,
       headerIconImgKey: config.header_icon_img_key,
+      onCardCreated,
     });
   }
 
@@ -372,6 +415,9 @@ export async function runAgent(
     streamingCard, cardkitCtrl, taskPanelCtrl,
     startTime: Date.now(),
     startupTime: startupTime ?? Date.now(),
+    profile,
+    prompt,
+    resumedSessionId: sessionId,
     textBuffer: [],
     thinkingBuffer: [],
     reasoningStartTime: null,

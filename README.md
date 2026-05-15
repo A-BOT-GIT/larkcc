@@ -44,6 +44,50 @@ larkcc --help           # 查看所有命令
 - 反应状态 — 处理中打 Typing，完成换 DONE
 - 响应元数据 — 每条回复显示耗时、模型、token 用量
 - 多机器人 — 多 profile 独立管理，同一台机器运行多个实例
+- **状态与历史命令** — `/status` 看运行状态、`/usage` 看 token 用量、`/sessions` 切换历史会话
+- **卡片快捷按钮** — 每条回复带 🔄 重试 / ➡️ 继续 / 📋 复制 / 🆕 新会话，一键操作
+
+## Status & Usage
+
+```
+/status         # 运行状态：cwd / profile / 当前 session / 启动时间 / 已处理消息数 / PID
+/st             # 同上
+
+/usage          # 默认显示今日
+/usage today    # 今日
+/usage week     # 近 7 天
+/usage month    # 当月
+/usage all      # 累计
+/u all          # 短别名
+```
+
+`/usage` 仅记录 token / 工具调用 / 对话次数 / 耗时 等原始数据（写入 `~/.larkcc/usage-{profile}.jsonl`），**不计算费用**。如需折算，可读取 jsonl 配合自家模型定价表离线计算。
+
+## Session History
+
+```
+/sessions                  # 列出最近 10 个会话（卡片含切换按钮）
+/ss                        # 短别名
+/ss resume <id>            # 切换到指定会话（id 可填前 6 位）
+/ss r <id>                 # 同上
+/ss new                    # 开新会话（清除当前 session）
+/ss delete <id>            # 从历史中移除某会话
+```
+
+会话元信息（首条 prompt、消息数、最近使用时间）存放在 `~/.larkcc/sessions-{profile}.jsonl`。每条 Claude 回复都附带卡片按钮，可在卡片上直接 ▶️ 继续此会话 / 🗑 删除。
+
+## Card Quick Actions
+
+每条 Claude 最终回复底部都有快捷按钮：
+
+| 按钮 | 行为 |
+|------|------|
+| 🔄 重试 | 用上一条 prompt 重新跑一遍 |
+| ➡️ 继续 | 发送 "继续" 给 Claude，让其延续输出 |
+| 📋 复制 | 把回复内容作为 text 消息回发，方便长按复制 |
+| 🆕 新会话 | 清除当前 session_id，下一条消息全新上下文 |
+
+> 飞书后台需开通「订阅卡片回调事件」权限。事件名：`card.action.trigger`。
 
 ## Slash Commands
 
@@ -120,7 +164,9 @@ profiles:
 | `docx:document` | 创建/编辑云文档 | 文档模式 |
 | `drive:file` | 删除云空间文件 | 文档清理 |
 
-事件订阅：使用**长连接** → 订阅 `im.message.receive_v1`
+事件订阅：使用**长连接** → 订阅 `im.message.receive_v1` 与 `card.action.trigger`
+
+> 注：v0.14 起 `/status`、`/s` 已让位给新的状态卡片命令，原 git status 快捷映射为 `/gs`、`/gst`。
 
 ## License
 
